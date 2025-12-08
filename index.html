@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SQL Chat Agent</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Optional Google Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg: #050816;
+      --card-bg: rgba(15, 23, 42, 0.92);
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.15);
+      --accent-strong: #0ea5e9;
+      --text: #e5e7eb;
+      --text-muted: #9ca3af;
+      --danger: #f97373;
+      --radius-lg: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #0f172a 0, #020617 45%, #000 100%);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .app-shell {
+      width: 100%;
+      max-width: 960px;
+      height: 90vh;
+      max-height: 720px;
+      background: radial-gradient(circle at top left, #1f2937 0, #020617 55%);
+      border-radius: 24px;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      box-shadow:
+        0 18px 45px rgba(15, 23, 42, 0.75),
+        0 0 0 1px rgba(15, 23, 42, 0.9);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Decorative gradient blobs */
+    .blob {
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(32px);
+      opacity: 0.35;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .blob-1 {
+      width: 240px;
+      height: 240px;
+      background: #22d3ee;
+      top: -80px;
+      right: -60px;
+    }
+
+    .blob-2 {
+      width: 260px;
+      height: 260px;
+      background: #a855f7;
+      bottom: -100px;
+      left: -80px;
+    }
+
+    .app-inner {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    /* Header */
+
+    .app-header {
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+      backdrop-filter: blur(18px);
+      background: linear-gradient(
+        135deg,
+        rgba(15, 23, 42, 0.95),
+        rgba(15, 23, 42, 0.7)
+      );
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 30%, #38bdf8, #0f172a);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      color: #e5e7eb;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.85);
+    }
+
+    .title-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .title-text h1 {
+      font-size: 17px;
+      margin: 0;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .title-text span {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pill {
+      padding: 5px 10px;
+      font-size: 11px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      color: var(--text-muted);
+      backdrop-filter: blur(12px);
+      background: radial-gradient(circle at top, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.7));
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #f97316;
+      box-shadow: 0 0 0 3px rgba(248, 171, 83, 0.25);
+    }
+
+    .status-dot.connected {
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+    }
+
+    .status-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Chat area */
+
+    .chat-container {
+      flex: 1;
+      padding: 16px 18px 8px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .hint-banner {
+      margin: 0 0 12px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      border-radius: 999px;
+      border: 1px dashed rgba(148, 163, 184, 0.5);
+      background: linear-gradient(
+        135deg,
+        rgba(15, 23, 42, 0.95),
+        rgba(15, 23, 42, 0.6)
+      );
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .hint-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .message-row {
+      display: flex;
+      width: 100%;
+    }
+
+    .message-row.user {
+      justify-content: flex-end;
+    }
+
+    .message-row.assistant {
+      justify-content: flex-start;
+    }
+
+    .avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 30%, #4ade80, #064e3b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      margin-right: 8px;
+      flex-shrink: 0;
+      color: #e5e7eb;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9);
+    }
+
+    .avatar.assistant {
+      background: radial-gradient(circle at 30% 30%, #38bdf8, #0f172a);
+    }
+
+    .bubble {
+      max-width: 72%;
+      padding: 10px 12px;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.45;
+      position: relative;
+      border: 1px solid transparent;
+      backdrop-filter: blur(16px);
+    }
+
+    .bubble.user {
+      background: linear-gradient(
+        135deg,
+        rgba(34, 197, 94, 0.2),
+        rgba(16, 185, 129, 0.08)
+      );
+      border-color: rgba(52, 211, 153, 0.65);
+      color: #bbf7d0;
+      border-bottom-right-radius: 2px;
+    }
+
+    .bubble.assistant {
+      background: linear-gradient(
+        135deg,
+        rgba(15, 23, 42, 0.95),
+        rgba(15, 23, 42, 0.6)
+      );
+      border-color: rgba(148, 163, 184, 0.55);
+      color: var(--text);
+      border-bottom-left-radius: 2px;
+    }
+
+    .bubble small.meta {
+      display: block;
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--text-muted);
+      opacity: 0.9;
+    }
+
+    .typing-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 6px 8px;
+    }
+
+    .typing-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--text-muted);
+      animation: bounce 1s infinite ease-in-out;
+    }
+
+    .typing-dot:nth-child(2) { animation-delay: 0.15s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+      40% { transform: translateY(-4px); opacity: 1; }
+    }
+
+    /* Input */
+
+    .input-bar {
+      padding: 10px 16px 14px;
+      border-top: 1px solid rgba(148, 163, 184, 0.4);
+      backdrop-filter: blur(18px);
+      background: linear-gradient(
+        180deg,
+        rgba(15, 23, 42, 0.9),
+        rgba(15, 23, 42, 0.98)
+      );
+    }
+
+    .input-inner {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      background: radial-gradient(circle at top left, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.9));
+      border-radius: 999px;
+      padding: 8px 10px 8px 12px;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+    }
+
+    textarea {
+      flex: 1;
+      border: none;
+      outline: none;
+      resize: none;
+      background: transparent;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      max-height: 88px;
+    }
+
+    textarea::placeholder {
+      color: rgba(148, 163, 184, 0.9);
+    }
+
+    .send-btn {
+      border: none;
+      outline: none;
+      border-radius: 999px;
+      padding: 8px 14px;
+      background: radial-gradient(circle at 30% 30%, var(--accent), var(--accent-strong));
+      color: #0b1120;
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: pointer;
+      box-shadow:
+        0 6px 16px rgba(56, 189, 248, 0.55),
+        0 0 0 1px rgba(8, 47, 73, 0.8);
+      transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+      white-space: nowrap;
+    }
+
+    .send-btn span.icon {
+      font-size: 15px;
+      margin-top: 1px;
+    }
+
+    .send-btn:active {
+      transform: translateY(1px) scale(0.99);
+      box-shadow:
+        0 2px 10px rgba(56, 189, 248, 0.35),
+        0 0 0 1px rgba(8, 47, 73, 0.9);
+      filter: brightness(0.98);
+    }
+
+    .send-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+      box-shadow: none;
+    }
+
+    .footnote {
+      padding: 0 18px 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+      opacity: 0.9;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .footnote span {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+
+    @media (max-width: 640px) {
+      .app-shell {
+        height: 100vh;
+        max-height: none;
+        border-radius: 0;
+      }
+
+      .bubble {
+        max-width: 82%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+
+    <div class="app-inner">
+      <header class="app-header">
+        <div class="title-row">
+          <div class="logo-circle">SQL</div>
+          <div class="title-text">
+            <h1>SQL Chat Agent</h1>
+            <span>Ask natural-language questions over Chinook.db</span>
+          </div>
+        </div>
+        <div class="status-row">
+          <div class="pill">
+            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;">
+              GEMINI · LANGCHAIN · SQLITE
+            </span>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <div id="status-dot" class="status-dot"></div>
+            <div id="status-label" class="status-label">Connecting…</div>
+          </div>
+        </div>
+      </header>
+
+      <main class="chat-container">
+        <div class="hint-banner">
+          <div class="hint-dot"></div>
+          <span>
+            Try: <strong>"Top 5 customers by total spending"</strong> or
+            <strong>"Which genre has the longest tracks on average?"</strong>
+          </span>
+        </div>
+        <div id="messages" class="messages"></div>
+      </main>
+
+      <div class="input-bar">
+        <div class="input-inner">
+          <textarea
+            id="input"
+            rows="1"
+            placeholder="Ask a question about the database..."
+          ></textarea>
+          <button id="send-btn" class="send-btn" disabled>
+            <span>Send</span>
+            <span class="icon">➤</span>
+          </button>
+        </div>
+      </div>
+      <div class="footnote">
+        <span>Data source: Chinook SQLite sample DB</span>
+        <span>Note: Agent will refuse math / celebrity / history questions.</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const WS_URL = "ws://localhost:8000/ws/sql-chat"; // adjust if backend host/port differs
+
+    const messagesEl = document.getElementById("messages");
+    const inputEl = document.getElementById("input");
+    const sendBtn = document.getElementById("send-btn");
+    const statusDot = document.getElementById("status-dot");
+    const statusLabel = document.getElementById("status-label");
+
+    let ws = null;
+    let isConnected = false;
+    let typingBubble = null;
+
+    function setStatus(connected) {
+      isConnected = connected;
+      if (connected) {
+        statusDot.classList.add("connected");
+        statusLabel.textContent = "Connected";
+        sendBtn.disabled = false;
+      } else {
+        statusDot.classList.remove("connected");
+        statusLabel.textContent = "Disconnected – retrying…";
+        sendBtn.disabled = true;
+      }
+    }
+
+    function addMessage(role, text) {
+      const row = document.createElement("div");
+      row.className = `message-row ${role}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${role}`;
+      bubble.innerText = text;
+
+      const meta = document.createElement("small");
+      meta.className = "meta";
+      const now = new Date();
+      meta.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+      bubble.appendChild(meta);
+
+      if (role === "assistant") {
+        const avatar = document.createElement("div");
+        avatar.className = "avatar assistant";
+        avatar.textContent = "AI";
+        row.appendChild(avatar);
+        row.appendChild(bubble);
+      } else {
+        // user
+        row.appendChild(bubble);
+      }
+
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function showTyping() {
+      if (typingBubble) return;
+      const row = document.createElement("div");
+      row.className = "message-row assistant";
+
+      const avatar = document.createElement("div");
+      avatar.className = "avatar assistant";
+      avatar.textContent = "AI";
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble assistant";
+      const t = document.createElement("div");
+      t.className = "typing-indicator";
+      t.innerHTML = `
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <span>Thinking…</span>
+      `;
+      bubble.appendChild(t);
+
+      row.appendChild(avatar);
+      row.appendChild(bubble);
+
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      typingBubble = row;
+    }
+
+    function hideTyping() {
+      if (typingBubble) {
+        messagesEl.removeChild(typingBubble);
+        typingBubble = null;
+      }
+    }
+
+    function connect() {
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        setStatus(true);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "answer") {
+            hideTyping();
+            addMessage("assistant", payload.content);
+          } else if (payload.type === "error") {
+            hideTyping();
+            addMessage("assistant", "[Error] " + payload.content);
+          } else {
+            // unknown type; you can log if you want
+            console.log("Unknown message type:", payload);
+          }
+        } catch (err) {
+          console.error("Failed to parse message:", err, event.data);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+      };
+
+      ws.onclose = () => {
+        setStatus(false);
+        // basic auto-reconnect after delay
+        setTimeout(() => {
+          connect();
+        }, 1500);
+      };
+    }
+
+    function sendMessage() {
+      const text = inputEl.value.trim();
+      if (!text || !isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+      inputEl.value = "";
+      inputEl.style.height = "auto";
+
+      addMessage("user", text);
+      showTyping();
+
+      ws.send(text);
+    }
+
+    // Auto-resize textarea
+    inputEl.addEventListener("input", () => {
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 88) + "px";
+    });
+
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    sendBtn.addEventListener("click", () => {
+      sendMessage();
+    });
+
+    // Initial connection
+    connect();
+
+    // Optional: greeting message
+    setTimeout(() => {
+      addMessage(
+        "assistant",
+        "Hi! I'm your SQL agent over Chinook.db. Ask me anything about tracks, albums, artists, customers, invoices, and more."
+      );
+    }, 300);
+  </script>
+</body>
+</html>
