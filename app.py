@@ -1,6 +1,10 @@
 import os
-import dotenv
 import uuid
+import json
+import tempfile
+import base64
+
+import dotenv
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +16,11 @@ from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
 
+# --- Audio libs ---
+import assemblyai as aai
+from elevenlabs.client import ElevenLabs
+
+
 # ==========================
 #   ENV + BASE SETUP
 # ==========================
@@ -19,6 +28,18 @@ from langgraph.checkpoint.memory import InMemorySaver
 dotenv.load_dotenv()
 
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
+if not ASSEMBLYAI_API_KEY:
+    raise RuntimeError("Missing ASSEMBLYAI_API_KEY in .env")
+if not ELEVENLABS_API_KEY:
+    raise RuntimeError("Missing ELEVENLABS_API_KEY in .env")
+
+# Configure SDKs
+aai.settings.api_key = ASSEMBLYAI_API_KEY
+eleven_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 # LangChain LLM
 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
@@ -65,6 +86,7 @@ agent = create_agent(
     checkpointer=InMemorySaver(),
 )
 
+
 # ==========================
 #   HELPER: EXTRACT TEXT
 # ==========================
@@ -100,9 +122,9 @@ def extract_text_from_message(message):
 #   FASTAPI APP
 # ==========================
 
-app = FastAPI(title="SQL Chat Backend")
+app = FastAPI(title="SQL Chat + Voice Backend")
 
-# CORS so you can call from a frontend (React, etc.)
+# CORS so you can call from a frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # in prod, restrict this
@@ -114,15 +136,19 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "SQL chat backend running"}
+    return {"status": "ok", "message": "SQL chat + voice backend running"}
 
+
+# ==========================
+#   TEXT CHAT VIA WEBSOCKET
+# ==========================
 
 @app.websocket("/ws/sql-chat")
 async def sql_chat(ws: WebSocket):
     """
     WebSocket endpoint for text-only chat with the SQL agent.
 
-    Protocol (simple):
+    Protocol:
     - Client sends plain text messages (user questions).
     - Server responds with JSON:
         { "type": "answer", "content": "<assistant response>" }
@@ -174,6 +200,175 @@ async def sql_chat(ws: WebSocket):
         print(f"[WS] Client disconnected (thread_id={thread_id})")
     except Exception as e:
         print(f"[WS] Unexpected error: {e}")
+
+
+# ==========================
+#   VOICE VIA WEBSOCKET
+# ==========================
+
+@app.websocket("/ws/sql-voice")
+async def sql_voice(ws: WebSocket):
+    """
+    WebSocket endpoint for voice queries.
+
+    Protocol:
+    - Client sends JSON text frames:
+        {"type": "start_voice"}
+      then binary frames with audio chunks (webm/opus),
+      then JSON text frame:
+        {"type": "stop_voice"}
+
+    - Server buffers audio between start/stop,
+      runs STT (AssemblyAI) -> SQL agent -> TTS (ElevenLabs),
+      sends back one JSON message:
+        {
+          "type": "voice_result",
+          "transcript": "...",
+          "answer": "...",
+          "audio_base64": "<mp3-base64>",
+          "audio_mime": "audio/mpeg"
+        }
+    """
+    await ws.accept()
+    session_id = str(uuid.uuid4())
+    print(f"[VOICE][{session_id}] WebSocket connected")
+
+    recording = False
+    audio_buffer = bytearray()
+
+    try:
+        while True:
+            msg = await ws.receive()
+
+            # Handle disconnect
+            if msg["type"] == "websocket.disconnect":
+                print(f"[VOICE][{session_id}] Disconnected")
+                break
+
+            # Binary audio data from client
+            if msg.get("bytes") is not None:
+                if recording:
+                    audio_buffer.extend(msg["bytes"])
+                continue
+
+            # Text frame (JSON control)
+            if msg.get("text") is not None:
+                try:
+                    data = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    await ws.send_json({"type": "error", "message": "Invalid JSON"})
+                    continue
+
+                mtype = data.get("type")
+
+                if mtype == "start_voice":
+                    print(f"[VOICE][{session_id}] start_voice")
+                    recording = True
+                    audio_buffer = bytearray()
+
+                elif mtype == "stop_voice":
+                    print(f"[VOICE][{session_id}] stop_voice (size={len(audio_buffer)} bytes)")
+                    recording = False
+
+                    if not audio_buffer:
+                        await ws.send_json({
+                            "type": "error",
+                            "message": "No audio received.",
+                        })
+                        continue
+
+                    # ---- 1) Save audio to a temp .webm file ----
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+                        tmp.write(audio_buffer)
+                        tmp_path = tmp.name
+
+                    # ---- 2) Transcribe with AssemblyAI ----
+                    try:
+                        transcriber = aai.Transcriber()
+                        tr = transcriber.transcribe(tmp_path)
+
+                        if tr.error:
+                            raise RuntimeError(tr.error)
+
+                        transcript_text = (tr.text or "").strip()
+                    except Exception as e:
+                        err = f"AssemblyAI STT error: {e}"
+                        print(f"[VOICE][{session_id}] {err}")
+                        await ws.send_json({"type": "error", "message": err})
+                        continue
+
+                    if not transcript_text:
+                        await ws.send_json({
+                            "type": "error",
+                            "message": "Could not detect speech in the audio.",
+                        })
+                        continue
+
+                    print(f"[VOICE][{session_id}] Transcript: {transcript_text}")
+
+                    # ---- 3) Call SQL agent with transcript ----
+                    try:
+                        result = agent.invoke(
+                            {"messages": [{"role": "user", "content": transcript_text}]},
+                            {"configurable": {"thread_id": session_id}},
+                        )
+                        ai_message = result["messages"][-1]
+                        answer_text = extract_text_from_message(ai_message).strip()
+                    except Exception as e:
+                        err = f"SQL agent error: {e}"
+                        print(f"[VOICE][{session_id}] {err}")
+                        await ws.send_json({"type": "error", "message": err})
+                        continue
+
+                    print(f"[VOICE][{session_id}] Answer: {answer_text}")
+
+                    # ---- 4) TTS with ElevenLabs ----
+                    try:
+                        tts_stream = eleven_client.text_to_speech.convert(
+                            text=answer_text or "Sorry, I could not generate an answer.",
+                            voice_id="JBFqnCBsd6RMkjVDRZzb",  # change to your preferred voice
+                            model_id="eleven_multilingual_v2",
+                            output_format="mp3_44100_128",
+                        )
+                        audio_bytes = b"".join(chunk for chunk in tts_stream)
+                        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                    except Exception as e:
+                        err = f"ElevenLabs TTS error: {e}"
+                        print(f"[VOICE][{session_id}] {err}")
+                        # still send text result even if TTS fails
+                        await ws.send_json({
+                            "type": "voice_result",
+                            "transcript": transcript_text,
+                            "answer": answer_text,
+                            "audio_base64": None,
+                            "audio_mime": None,
+                            "warning": err,
+                        })
+                        continue
+
+                    # ---- 5) Send result back to client ----
+                    await ws.send_json({
+                        "type": "voice_result",
+                        "transcript": transcript_text,
+                        "answer": answer_text,
+                        "audio_base64": audio_b64,
+                        "audio_mime": "audio/mpeg",
+                    })
+
+                else:
+                    await ws.send_json({
+                        "type": "error",
+                        "message": f"Unknown message type: {mtype}",
+                    })
+
+    except WebSocketDisconnect:
+        print(f"[VOICE][{session_id}] Client disconnected")
+    except Exception as e:
+        print(f"[VOICE][{session_id}] Unexpected error: {e}")
+        try:
+            await ws.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

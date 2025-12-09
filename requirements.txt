@@ -5,3 +5,5 @@ langgraph
 langchain[google-genai]
 requests
 fastapi[standard]
+assemblyai
+elevenlabs

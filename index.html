@@ -393,6 +393,24 @@
       box-shadow: none;
     }
 
+    /* Mic button variant */
+    #mic-btn {
+      background: radial-gradient(circle at 30% 30%, #f97316, #ea580c);
+      box-shadow:
+        0 6px 16px rgba(248, 171, 83, 0.55),
+        0 0 0 1px rgba(120, 53, 15, 0.85);
+      padding-inline: 12px;
+      min-width: 42px;
+    }
+
+    #mic-btn.recording {
+      filter: brightness(1.05);
+      transform: translateY(1px) scale(0.99);
+      box-shadow:
+        0 2px 10px rgba(248, 171, 83, 0.4),
+        0 0 0 1px rgba(120, 53, 15, 0.9);
+    }
+
     .footnote {
       padding: 0 18px 8px;
       font-size: 10px;
@@ -467,6 +485,11 @@
             rows="1"
             placeholder="Ask a question about the database..."
           ></textarea>
+          <!-- Mic button -->
+          <button id="mic-btn" class="send-btn" type="button">
+            <span class="icon" id="mic-icon">🎙️</span>
+          </button>
+          <!-- Text send button -->
           <button id="send-btn" class="send-btn" disabled>
             <span>Send</span>
             <span class="icon">➤</span>
@@ -481,17 +504,24 @@
   </div>
 
   <script>
-    const WS_URL = "ws://localhost:8000/ws/sql-chat"; // adjust if backend host/port differs
+    const WS_URL = "ws://localhost:8000/ws/sql-chat";       // text chat
+    const VOICE_WS_URL = "ws://localhost:8000/ws/sql-voice"; // voice
 
     const messagesEl = document.getElementById("messages");
     const inputEl = document.getElementById("input");
     const sendBtn = document.getElementById("send-btn");
     const statusDot = document.getElementById("status-dot");
     const statusLabel = document.getElementById("status-label");
+    const micBtn = document.getElementById("mic-btn");
+    const micIcon = document.getElementById("mic-icon");
 
     let ws = null;
+    let voiceWs = null;
     let isConnected = false;
+    let voiceConnected = false;
     let typingBubble = null;
+
+    // ====== UI helpers ======
 
     function setStatus(connected) {
       isConnected = connected;
@@ -572,7 +602,9 @@
       }
     }
 
-    function connect() {
+    // ====== Text chat WebSocket ======
+
+    function connectChat() {
       ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
@@ -589,7 +621,6 @@
             hideTyping();
             addMessage("assistant", "[Error] " + payload.content);
           } else {
-            // unknown type; you can log if you want
             console.log("Unknown message type:", payload);
           }
         } catch (err) {
@@ -603,9 +634,8 @@
 
       ws.onclose = () => {
         setStatus(false);
-        // basic auto-reconnect after delay
         setTimeout(() => {
-          connect();
+          connectChat();
         }, 1500);
       };
     }
@@ -621,6 +651,122 @@
 
       ws.send(text);
     }
+
+    // ====== Voice WebSocket + recording ======
+
+    let mediaRecorder = null;
+    let isRecording = false;
+
+    function connectVoice() {
+      voiceWs = new WebSocket(VOICE_WS_URL);
+
+      voiceWs.onopen = () => {
+        voiceConnected = true;
+        console.log("[VOICE] connected");
+      };
+
+      voiceWs.onclose = () => {
+        voiceConnected = false;
+        console.log("[VOICE] disconnected");
+        // Optional: reconnect
+        setTimeout(() => {
+          connectVoice();
+        }, 2000);
+      };
+
+      voiceWs.onerror = (err) => {
+        console.error("[VOICE] error:", err);
+      };
+
+      voiceWs.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+
+          if (payload.type === "voice_result") {
+            hideTyping();
+
+            const transcript = payload.transcript || "";
+            const answer = payload.answer || "";
+
+            if (transcript) addMessage("user", transcript);
+            if (answer) addMessage("assistant", answer);
+
+            if (payload.audio_base64 && payload.audio_mime) {
+              const audio = new Audio(
+                `data:${payload.audio_mime};base64,${payload.audio_base64}`
+              );
+              audio.play().catch(err =>
+                console.error("[VOICE] failed to play audio:", err)
+              );
+            }
+
+            if (payload.warning) {
+              console.warn("[VOICE] TTS warning:", payload.warning);
+            }
+          } else if (payload.type === "error") {
+            hideTyping();
+            addMessage("assistant", "[Voice error] " + payload.message);
+          } else {
+            console.log("[VOICE] unknown payload:", payload);
+          }
+        } catch (err) {
+          console.error("[VOICE] failed to parse message:", err, event.data);
+        }
+      };
+    }
+
+    async function startRecording() {
+      if (!voiceConnected || !voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
+        addMessage("assistant", "[Error] Voice channel not connected.");
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0 && voiceWs.readyState === WebSocket.OPEN) {
+            e.data.arrayBuffer().then(buf => {
+              voiceWs.send(buf); // binary frame
+            });
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          if (mediaRecorder && mediaRecorder.stream) {
+            mediaRecorder.stream.getTracks().forEach(t => t.stop());
+          }
+          if (voiceWs.readyState === WebSocket.OPEN) {
+            showTyping();
+            voiceWs.send(JSON.stringify({ type: "stop_voice" }));
+          }
+        };
+
+        // Tell backend we're starting a voice capture
+        voiceWs.send(JSON.stringify({ type: "start_voice" }));
+        mediaRecorder.start(250); // send chunk every 250ms
+
+        isRecording = true;
+        micBtn.classList.add("recording");
+        micIcon.textContent = "⏹";
+      } catch (err) {
+        console.error("Could not start recording:", err);
+        addMessage("assistant", "[Error] Microphone access denied or unavailable.");
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        micBtn.classList.remove("recording");
+        micIcon.textContent = "🎙️";
+      }
+    }
+
+    // ====== Event listeners ======
 
     // Auto-resize textarea
     inputEl.addEventListener("input", () => {
@@ -639,14 +785,23 @@
       sendMessage();
     });
 
-    // Initial connection
-    connect();
+    micBtn.addEventListener("click", async () => {
+      if (!isRecording) {
+        await startRecording();
+      } else {
+        stopRecording();
+      }
+    });
+
+    // Initial connections
+    connectChat();
+    connectVoice();
 
     // Optional: greeting message
     setTimeout(() => {
       addMessage(
         "assistant",
-        "Hi! I'm your SQL agent over Chinook.db. Ask me anything about tracks, albums, artists, customers, invoices, and more."
+        "Hi! I'm your SQL agent over Chinook.db. Ask me anything about tracks, albums, artists, customers, invoices, and more. You can type or use the mic button to speak."
       );
     }, 300);
   </script>
